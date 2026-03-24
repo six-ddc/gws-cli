@@ -116,35 +116,39 @@ The CLI supports multiple auth workflows so it works on your laptop, in CI, and 
 
 | I have… | Use |
 |---|---|
-| No GCP project and want to get started quickly | [`gws auth login-workspace`](#workspace-extension-auth-no-gcp-project) (easiest) |
-| `gcloud` installed and authenticated | [`gws auth setup`](#interactive-local-desktop) (fastest with own project) |
+| Nothing — just want to get started | [`gws auth login`](#default-cloud-function-proxy-no-gcp-project) (default, no setup needed) |
+| `gcloud` installed and want my own GCP project | [`gws auth setup`](#own-gcp-project-custom-scopes--higher-quotas) |
 | A GCP project but no `gcloud` | [Manual OAuth setup](#manual-oauth-setup-google-cloud-console) |
 | An existing OAuth access token | [`GOOGLE_WORKSPACE_CLI_TOKEN`](#pre-obtained-access-token) |
 | Existing Credentials | [`GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE`](#service-account-server-to-server) |
 
-### Workspace extension auth (no GCP project)
+### Default: Cloud Function proxy (no GCP project)
 
-The fastest way to get started — no GCP project, no client secret, no `gcloud` needed. This uses the same Cloud Function proxy as the [gemini-cli-extensions/workspace](https://github.com/gemini-cli-extensions/workspace) extension to handle OAuth token exchange server-side.
+`gws auth login` defaults to the Cloud Function proxy — no GCP project, no client secret, no `gcloud` needed. This uses the same proxy as the [gemini-cli-extensions/workspace](https://github.com/gemini-cli-extensions/workspace) extension to handle OAuth token exchange server-side.
 
 ```bash
-gws auth login-workspace   # opens browser → Google consent → done
+gws auth login                   # opens browser → Google consent → done
+gws auth login --workspace       # same thing, explicit flag
+gws auth login-workspace         # alias — also works
 ```
 
 The Cloud Function holds the OAuth `client_secret` so you never need to create your own GCP project or download a client JSON file. Tokens are refreshed automatically through the same proxy.
 
 > [!NOTE]
-> **Switching auth methods:** `gws auth login-workspace` and `gws auth login` (own OAuth client) both save to the same encrypted credential store (`~/.config/gws/credentials.enc`). Running either one replaces the previous credential. To switch back, just run the other login command. Use `gws auth status` to check which method is active.
+> **Auto-detection:** If you previously ran `gws auth setup` or have a `client_secret.json`, `gws auth login` will automatically use your own OAuth client instead. Use `--workspace` to force the Cloud Function proxy, or `--own-client` to force your own credentials.
 
-> [!TIP]
-> **When to use your own GCP project instead:** If you need custom scopes, higher API quotas, service-account auth, or want full control over the OAuth client, use [`gws auth setup`](#interactive-local-desktop) or [manual setup](#manual-oauth-setup-google-cloud-console).
+> [!NOTE]
+> **Switching auth methods:** Both flows save to the same encrypted credential store (`~/.config/gws/credentials.enc`). Running either one replaces the previous credential. Use `gws auth status` to check which method is active.
 
-### Interactive (local desktop)
+### Own GCP project (custom scopes / higher quotas)
+
+Use your own GCP project when you need custom scopes, higher API quotas, service-account auth, or full control over the OAuth client.
 
 Credentials are encrypted at rest (AES-256-GCM) with the key stored in your OS keyring (or `~/.config/gws/.encryption_key` when `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file`).
 
 ```bash
-gws auth setup       # one-time: creates a Cloud project, enables APIs, logs you in
-gws auth login       # subsequent scope selection and login
+gws auth setup                   # one-time: creates a Cloud project, enables APIs, logs you in
+gws auth login --own-client      # subsequent login with your own OAuth client
 ```
 
 > `gws auth setup` requires the [`gcloud` CLI](https://cloud.google.com/sdk/docs/install). If you don't have `gcloud`, use the [manual setup](#manual-oauth-setup-google-cloud-console) below instead.

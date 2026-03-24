@@ -146,7 +146,21 @@ enum ScopeMode {
 /// Used by both `auth_command()` and `login_command()` as single source of truth.
 fn build_login_subcommand() -> clap::Command {
     clap::Command::new("login")
-        .about("Authenticate via OAuth2 (opens browser)")
+        .about("Authenticate via OAuth2 (opens browser). Defaults to Cloud Function proxy; use --own-client for your own GCP project")
+        .arg(
+            clap::Arg::new("workspace")
+                .long("workspace")
+                .help("Force Cloud Function proxy auth (no GCP project needed)")
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("own-client"),
+        )
+        .arg(
+            clap::Arg::new("own-client")
+                .long("own-client")
+                .help("Force traditional OAuth with your own client_secret.json / env vars")
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("workspace"),
+        )
         .arg(
             clap::Arg::new("readonly")
                 .long("readonly")
@@ -237,9 +251,31 @@ pub async fn handle_auth_command(args: &[String]) -> Result<(), GwsError> {
 
     match matches.subcommand() {
         Some(("login", sub_m)) => {
-            let (scope_mode, services_filter) = parse_login_args(sub_m);
+            let force_workspace = sub_m.get_flag("workspace");
+            let force_own_client = sub_m.get_flag("own-client");
 
-            handle_login_inner(scope_mode, services_filter).await
+            if force_workspace {
+                // Explicit --workspace flag → always use Cloud Function proxy
+                return handle_login_workspace().await;
+            }
+
+            if force_own_client {
+                // Explicit --own-client flag → use traditional OAuth (error if no credentials)
+                let (scope_mode, services_filter) = parse_login_args(sub_m);
+                return handle_login_inner(scope_mode, services_filter).await;
+            }
+
+            // Default: try own credentials first; fall back to Cloud Function proxy
+            if resolve_client_credentials().is_ok() {
+                let (scope_mode, services_filter) = parse_login_args(sub_m);
+                handle_login_inner(scope_mode, services_filter).await
+            } else {
+                eprintln!(
+                    "No own OAuth client configured — using Cloud Function proxy (default).\n\
+                     To use your own GCP project instead, run: gws auth setup\n"
+                );
+                handle_login_workspace().await
+            }
         }
         Some(("setup", sub_m)) => {
             // Collect remaining args and delegate to setup's own clap parser.
@@ -582,12 +618,13 @@ fn resolve_client_credentials() -> Result<(String, String, Option<String>), GwsE
         )),
         Err(_) => Err(GwsError::Auth(
             format!(
-                "No OAuth client configured.\n\n\
+                "No own OAuth client configured.\n\n\
                  Either:\n  \
-                   1. Run `gws auth setup` to configure a GCP project and OAuth client\n  \
-                   2. Download client_secret.json from Google Cloud Console and save it to:\n     \
+                   1. Run `gws auth login` (defaults to Cloud Function proxy — no GCP project needed)\n  \
+                   2. Run `gws auth setup` to configure a GCP project and OAuth client\n  \
+                   3. Download client_secret.json from Google Cloud Console and save it to:\n     \
                       {}\n  \
-                   3. Set env vars: GOOGLE_WORKSPACE_CLI_CLIENT_ID and GOOGLE_WORKSPACE_CLI_CLIENT_SECRET",
+                   4. Set env vars: GOOGLE_WORKSPACE_CLI_CLIENT_ID and GOOGLE_WORKSPACE_CLI_CLIENT_SECRET",
                 crate::oauth_config::client_config_path().display()
             ),
         )),
@@ -1719,7 +1756,7 @@ mod tests {
         } else {
             assert!(result.is_err());
             let err_msg = result.unwrap_err().to_string();
-            assert!(err_msg.contains("No OAuth client configured"));
+            assert!(err_msg.contains("No own OAuth client configured"));
         }
     }
 
@@ -1838,7 +1875,7 @@ mod tests {
         if !crate::oauth_config::client_config_path().exists() {
             assert!(result.is_err());
             match result.unwrap_err() {
-                GwsError::Auth(msg) => assert!(msg.contains("No OAuth client configured")),
+                GwsError::Auth(msg) => assert!(msg.contains("No own OAuth client configured")),
                 other => panic!("Expected Auth error, got: {other:?}"),
             }
         }

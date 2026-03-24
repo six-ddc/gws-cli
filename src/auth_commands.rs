@@ -211,6 +211,10 @@ fn auth_command() -> clap::Command {
                 ),
         )
         .subcommand(clap::Command::new("logout").about("Clear saved credentials and token cache"))
+        .subcommand(
+            clap::Command::new("import-workspace")
+                .about("Import credentials from gemini-cli-extensions/workspace keychain"),
+        )
 }
 
 /// Handle `gws auth <subcommand>`.
@@ -251,6 +255,7 @@ pub async fn handle_auth_command(args: &[String]) -> Result<(), GwsError> {
             handle_export(unmasked).await
         }
         Some(("logout", _)) => handle_logout(),
+        Some(("import-workspace", _)) => handle_import_workspace().await,
         _ => {
             // No subcommand → print help
             auth_command()
@@ -1290,15 +1295,57 @@ async fn handle_status() -> Result<(), GwsError> {
     Ok(())
 }
 
+/// Import credentials from the gemini-cli-extensions/workspace keychain.
+///
+/// 1. Read the workspace extension's OAuth credentials from the OS keychain.
+/// 2. Refresh the token via the Cloud Function proxy to verify it works.
+/// 3. Fetch the user's email to confirm identity.
+/// 4. Save the credential as an encrypted `cloud_function_proxy` credential.
+async fn handle_import_workspace() -> Result<(), GwsError> {
+    let cred = crate::cloud_auth::import_from_workspace()?;
+
+    // Verify the credential works by obtaining a token
+    let access_token = cred
+        .get_token()
+        .await
+        .map_err(|e| GwsError::Auth(format!("Failed to verify imported credentials: {e:#}")))?;
+
+    // Fetch user email to confirm identity
+    let email = fetch_userinfo_email(&access_token).await;
+
+    // Serialize and save
+    let creds_json = crate::cloud_auth::to_json(&cred);
+    let creds_str = serde_json::to_string_pretty(&creds_json)
+        .map_err(|e| GwsError::Auth(format!("Failed to serialize credentials: {e}")))?;
+
+    let enc_path = credential_store::save_encrypted(&creds_str)
+        .map_err(|e| GwsError::Auth(format!("Failed to encrypt credentials: {e}")))?;
+
+    let output = json!({
+        "status": "success",
+        "message": "Workspace extension credentials imported successfully.",
+        "account": email.as_deref().unwrap_or("(unknown)"),
+        "credentials_file": enc_path.display().to_string(),
+        "credential_type": "cloud_function_proxy",
+        "scope": cred.scope,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&output).unwrap_or_default()
+    );
+    Ok(())
+}
+
 fn handle_logout() -> Result<(), GwsError> {
     let plain_path = plain_credentials_path();
     let enc_path = credential_store::encrypted_credentials_path();
     let token_cache = token_cache_path();
     let sa_token_cache = config_dir().join("sa_token_cache.json");
+    let cloud_token_cache = config_dir().join(crate::cloud_auth::CLOUD_TOKEN_CACHE_FILE);
 
     let mut removed = Vec::new();
 
-    for path in [&enc_path, &plain_path, &token_cache, &sa_token_cache] {
+    for path in [&enc_path, &plain_path, &token_cache, &sa_token_cache, &cloud_token_cache] {
         if path.exists() {
             std::fs::remove_file(path).map_err(|e| {
                 GwsError::Validation(format!("Failed to remove {}: {e}", path.display()))

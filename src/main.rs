@@ -22,6 +22,7 @@
 mod auth;
 pub(crate) mod auth_commands;
 mod client;
+mod cloud_auth;
 mod commands;
 pub(crate) mod credential_store;
 mod discovery;

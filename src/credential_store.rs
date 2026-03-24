@@ -161,8 +161,8 @@ impl KeyringBackend {
         let raw = std::env::var("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND").unwrap_or_default();
         let lower = raw.to_lowercase();
         match lower.as_str() {
-            "file" => KeyringBackend::File,
-            "keyring" | "" => KeyringBackend::Keyring,
+            "file" | "" => KeyringBackend::File,
+            "keyring" => KeyringBackend::Keyring,
             other => {
                 // Item 1: warn on unrecognized values
                 eprintln!(

@@ -19,11 +19,7 @@ The `gws` binary must be on `$PATH`. See the project README for install options.
 ## Authentication
 
 ```bash
-# Browser-based OAuth (interactive)
-gws auth login
-
-# Service Account
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+gws auth login    # opens browser → Google consent → done
 ```
 
 ## Global Flags

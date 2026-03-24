@@ -19,7 +19,10 @@ The `gws` binary must be on `$PATH`. See the project README for install options.
 ## Authentication
 
 ```bash
-# Browser-based OAuth (interactive)
+# Quick start — no GCP project needed (uses Cloud Function proxy)
+gws auth login-workspace
+
+# Browser-based OAuth with your own GCP project
 gws auth login
 
 # Service Account

@@ -2,4 +2,4 @@
 "@googleworkspace/cli": minor
 ---
 
-Add `gws auth import-workspace` command to import OAuth credentials from the gemini-cli-extensions/workspace extension's OS keychain, using a Cloud Function proxy for token refresh without requiring a local client_secret.
+Add `gws auth login-workspace` command for zero-setup authentication via a Cloud Function proxy (no GCP project or client_secret needed). Uses the same OAuth flow as the gemini-cli-extensions/workspace extension — the Cloud Function handles token exchange and refresh server-side.

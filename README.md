@@ -76,10 +76,11 @@ brew install googleworkspace-cli
 ## Quick Start
 
 ```bash
-gws auth setup     # walks you through Google Cloud project config
-gws auth login     # subsequent OAuth login
+gws auth login-workspace   # no GCP project needed — authenticate in seconds
 gws drive files list --params '{"pageSize": 5}'
 ```
+
+> Already have a GCP project? Use `gws auth setup` + `gws auth login` instead for custom scopes and quotas.
 
 ## Why gws?
 
@@ -115,10 +116,27 @@ The CLI supports multiple auth workflows so it works on your laptop, in CI, and 
 
 | I have… | Use |
 |---|---|
-| `gcloud` installed and authenticated | [`gws auth setup`](#interactive-local-desktop) (fastest) |
+| No GCP project and want to get started quickly | [`gws auth login-workspace`](#workspace-extension-auth-no-gcp-project) (easiest) |
+| `gcloud` installed and authenticated | [`gws auth setup`](#interactive-local-desktop) (fastest with own project) |
 | A GCP project but no `gcloud` | [Manual OAuth setup](#manual-oauth-setup-google-cloud-console) |
 | An existing OAuth access token | [`GOOGLE_WORKSPACE_CLI_TOKEN`](#pre-obtained-access-token) |
 | Existing Credentials | [`GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE`](#service-account-server-to-server) |
+
+### Workspace extension auth (no GCP project)
+
+The fastest way to get started — no GCP project, no client secret, no `gcloud` needed. This uses the same Cloud Function proxy as the [gemini-cli-extensions/workspace](https://github.com/gemini-cli-extensions/workspace) extension to handle OAuth token exchange server-side.
+
+```bash
+gws auth login-workspace   # opens browser → Google consent → done
+```
+
+The Cloud Function holds the OAuth `client_secret` so you never need to create your own GCP project or download a client JSON file. Tokens are refreshed automatically through the same proxy.
+
+> [!NOTE]
+> **Switching auth methods:** `gws auth login-workspace` and `gws auth login` (own OAuth client) both save to the same encrypted credential store (`~/.config/gws/credentials.enc`). Running either one replaces the previous credential. To switch back, just run the other login command. Use `gws auth status` to check which method is active.
+
+> [!TIP]
+> **When to use your own GCP project instead:** If you need custom scopes, higher API quotas, service-account auth, or want full control over the OAuth client, use [`gws auth setup`](#interactive-local-desktop) or [manual setup](#manual-oauth-setup-google-cloud-console).
 
 ### Interactive (local desktop)
 
@@ -213,8 +231,9 @@ export GOOGLE_WORKSPACE_CLI_TOKEN=$(gcloud auth print-access-token)
 | -------- | ---------------------- | --------------------------------------- |
 | 1        | Access token           | `GOOGLE_WORKSPACE_CLI_TOKEN`            |
 | 2        | Credentials file       | `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` |
-| 3        | Encrypted credentials  | `gws auth login`                        |
+| 3        | Encrypted credentials  | `gws auth login` or `gws auth login-workspace` |
 | 4        | Plaintext credentials  | `~/.config/gws/credentials.json`        |
+| 5        | Application Default Credentials | `GOOGLE_APPLICATION_CREDENTIALS` or `gcloud auth application-default login` |
 
 Environment variables can also live in a `.env` file.
 

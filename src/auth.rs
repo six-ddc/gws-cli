@@ -75,6 +75,7 @@ fn adc_well_known_path() -> Option<PathBuf> {
 enum Credential {
     AuthorizedUser(yup_oauth2::authorized_user::AuthorizedUserSecret),
     ServiceAccount(yup_oauth2::ServiceAccountKey),
+    CloudFunctionProxy(crate::cloud_auth::CloudFunctionCredential),
 }
 
 /// Fetches access tokens for a fixed set of scopes.
@@ -179,6 +180,14 @@ async fn get_token_inner(
     token_cache_path: &std::path::Path,
 ) -> anyhow::Result<String> {
     match creds {
+        Credential::CloudFunctionProxy(cred) => {
+            // Scopes are baked into the credential at import time and enforced
+            // server-side by the Cloud Function proxy, so `scopes` is unused here.
+            let _ = scopes;
+            cred.get_token()
+                .await
+                .map_err(|e| anyhow::anyhow!("Cloud Function proxy auth failed: {e:#}"))
+        }
         Credential::AuthorizedUser(secret) => {
             let auth = yup_oauth2::AuthorizedUserAuthenticator::builder(secret)
                 .with_storage(Box::new(crate::token_storage::EncryptedTokenStorage::new(
@@ -222,6 +231,7 @@ async fn get_token_inner(
 ///
 /// Determines the credential type from the `"type"` field:
 /// - `"service_account"` → [`Credential::ServiceAccount`]
+/// - `"cloud_function_proxy"` → [`Credential::CloudFunctionProxy`]
 /// - anything else (including `"authorized_user"`) → [`Credential::AuthorizedUser`]
 ///
 /// Uses the already-parsed `serde_json::Value` to avoid a second string parse.
@@ -240,6 +250,11 @@ async fn parse_credential_file(
             )
         })?;
         return Ok(Credential::ServiceAccount(key));
+    }
+
+    // Cloud Function proxy credentials (from workspace extension import)
+    if let Some(cloud_cred) = crate::cloud_auth::try_parse(&json) {
+        return Ok(Credential::CloudFunctionProxy(cloud_cred));
     }
 
     // Deserialize from the Value we already have — avoids a second string parse.

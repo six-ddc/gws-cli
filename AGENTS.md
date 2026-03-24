@@ -50,8 +50,9 @@ The CLI uses a **two-phase argument parsing** strategy:
 | `src/discovery.rs`        | Serde models for Discovery Document + fetch/cache                                         |
 | `src/services.rs`         | Service alias → Discovery API name/version mapping                                        |
 | `src/auth.rs`             | OAuth2 token acquisition via env vars, encrypted credentials, or ADC                      |
+| `src/cloud_auth.rs`       | Cloud Function proxy auth: OAuth login flow and token refresh without local client_secret  |
 | `src/credential_store.rs` | AES-256-GCM encryption/decryption of credential files                                     |
-| `src/auth_commands.rs`    | `gws auth` subcommands: `login`, `logout`, `setup`, `status`, `export`                    |
+| `src/auth_commands.rs`    | `gws auth` subcommands: `login`, `login-workspace`, `logout`, `setup`, `status`, `export` |
 | `src/commands.rs`         | Recursive `clap::Command` builder from Discovery resources                                |
 | `src/executor.rs`         | HTTP request construction, response handling, schema validation                           |
 | `src/schema.rs`           | `gws schema` command — introspect API method schemas                                      |

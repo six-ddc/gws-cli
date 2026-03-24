@@ -146,7 +146,21 @@ enum ScopeMode {
 /// Used by both `auth_command()` and `login_command()` as single source of truth.
 fn build_login_subcommand() -> clap::Command {
     clap::Command::new("login")
-        .about("Authenticate via OAuth2 (opens browser)")
+        .about("Authenticate via OAuth2 (opens browser). Defaults to Cloud Function proxy; use --own-client for your own GCP project")
+        .arg(
+            clap::Arg::new("workspace")
+                .long("workspace")
+                .help("Force Cloud Function proxy auth (no GCP project needed)")
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("own-client"),
+        )
+        .arg(
+            clap::Arg::new("own-client")
+                .long("own-client")
+                .help("Force traditional OAuth with your own client_secret.json / env vars")
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("workspace"),
+        )
         .arg(
             clap::Arg::new("readonly")
                 .long("readonly")
@@ -211,6 +225,10 @@ fn auth_command() -> clap::Command {
                 ),
         )
         .subcommand(clap::Command::new("logout").about("Clear saved credentials and token cache"))
+        .subcommand(
+            clap::Command::new("login-workspace")
+                .about("Authenticate via Cloud Function proxy (no client secret needed)"),
+        )
 }
 
 /// Handle `gws auth <subcommand>`.
@@ -233,9 +251,31 @@ pub async fn handle_auth_command(args: &[String]) -> Result<(), GwsError> {
 
     match matches.subcommand() {
         Some(("login", sub_m)) => {
-            let (scope_mode, services_filter) = parse_login_args(sub_m);
+            let force_workspace = sub_m.get_flag("workspace");
+            let force_own_client = sub_m.get_flag("own-client");
 
-            handle_login_inner(scope_mode, services_filter).await
+            if force_workspace {
+                // Explicit --workspace flag → always use Cloud Function proxy
+                return handle_login_workspace().await;
+            }
+
+            if force_own_client {
+                // Explicit --own-client flag → use traditional OAuth (error if no credentials)
+                let (scope_mode, services_filter) = parse_login_args(sub_m);
+                return handle_login_inner(scope_mode, services_filter).await;
+            }
+
+            // Default: try own credentials first; fall back to Cloud Function proxy
+            if resolve_client_credentials().is_ok() {
+                let (scope_mode, services_filter) = parse_login_args(sub_m);
+                handle_login_inner(scope_mode, services_filter).await
+            } else {
+                eprintln!(
+                    "No own OAuth client configured — using Cloud Function proxy (default).\n\
+                     To use your own GCP project instead, run: gws auth setup\n"
+                );
+                handle_login_workspace().await
+            }
         }
         Some(("setup", sub_m)) => {
             // Collect remaining args and delegate to setup's own clap parser.
@@ -251,6 +291,7 @@ pub async fn handle_auth_command(args: &[String]) -> Result<(), GwsError> {
             handle_export(unmasked).await
         }
         Some(("logout", _)) => handle_logout(),
+        Some(("login-workspace", _)) => handle_login_workspace().await,
         _ => {
             // No subcommand → print help
             auth_command()
@@ -577,12 +618,13 @@ fn resolve_client_credentials() -> Result<(String, String, Option<String>), GwsE
         )),
         Err(_) => Err(GwsError::Auth(
             format!(
-                "No OAuth client configured.\n\n\
+                "No own OAuth client configured.\n\n\
                  Either:\n  \
-                   1. Run `gws auth setup` to configure a GCP project and OAuth client\n  \
-                   2. Download client_secret.json from Google Cloud Console and save it to:\n     \
+                   1. Run `gws auth login` (defaults to Cloud Function proxy — no GCP project needed)\n  \
+                   2. Run `gws auth setup` to configure a GCP project and OAuth client\n  \
+                   3. Download client_secret.json from Google Cloud Console and save it to:\n     \
                       {}\n  \
-                   3. Set env vars: GOOGLE_WORKSPACE_CLI_CLIENT_ID and GOOGLE_WORKSPACE_CLI_CLIENT_SECRET",
+                   4. Set env vars: GOOGLE_WORKSPACE_CLI_CLIENT_ID and GOOGLE_WORKSPACE_CLI_CLIENT_SECRET",
                 crate::oauth_config::client_config_path().display()
             ),
         )),
@@ -1290,15 +1332,66 @@ async fn handle_status() -> Result<(), GwsError> {
     Ok(())
 }
 
+/// Authenticate via the Cloud Function proxy OAuth flow.
+///
+/// Uses the same approach as the gemini-cli-extensions/workspace extension:
+/// 1. Open the browser to Google's OAuth consent page (redirect_uri = Cloud Function).
+/// 2. Cloud Function exchanges the auth code for tokens (it holds the client secret).
+/// 3. Cloud Function redirects back to a local HTTP server with tokens.
+/// 4. Save the credential as an encrypted `cloud_function_proxy` credential.
+async fn handle_login_workspace() -> Result<(), GwsError> {
+    // Use the same scopes that gws needs for its Workspace operations.
+    // We always include identity scopes so we can fetch the user's email.
+    let scopes: Vec<&str> = vec![
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/presentations",
+    ];
+
+    let (cred, access_token) = crate::cloud_auth::login(&scopes).await?;
+
+    // Fetch user email to confirm identity
+    let email = fetch_userinfo_email(&access_token).await;
+
+    // Serialize and save
+    let creds_json = crate::cloud_auth::to_json(&cred);
+    let creds_str = serde_json::to_string_pretty(&creds_json)
+        .map_err(|e| GwsError::Auth(format!("Failed to serialize credentials: {e}")))?;
+
+    let enc_path = credential_store::save_encrypted(&creds_str)
+        .map_err(|e| GwsError::Auth(format!("Failed to encrypt credentials: {e}")))?;
+
+    let output = json!({
+        "status": "success",
+        "message": "Authentication successful. Encrypted credentials saved.",
+        "account": email.as_deref().unwrap_or("(unknown)"),
+        "credentials_file": enc_path.display().to_string(),
+        "credential_type": "cloud_function_proxy",
+        "scope": cred.scope,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&output).unwrap_or_default()
+    );
+    Ok(())
+}
+
 fn handle_logout() -> Result<(), GwsError> {
     let plain_path = plain_credentials_path();
     let enc_path = credential_store::encrypted_credentials_path();
     let token_cache = token_cache_path();
     let sa_token_cache = config_dir().join("sa_token_cache.json");
+    let cloud_token_cache = config_dir().join(crate::cloud_auth::CLOUD_TOKEN_CACHE_FILE);
 
     let mut removed = Vec::new();
 
-    for path in [&enc_path, &plain_path, &token_cache, &sa_token_cache] {
+    for path in [&enc_path, &plain_path, &token_cache, &sa_token_cache, &cloud_token_cache] {
         if path.exists() {
             std::fs::remove_file(path).map_err(|e| {
                 GwsError::Validation(format!("Failed to remove {}: {e}", path.display()))
@@ -1663,7 +1756,7 @@ mod tests {
         } else {
             assert!(result.is_err());
             let err_msg = result.unwrap_err().to_string();
-            assert!(err_msg.contains("No OAuth client configured"));
+            assert!(err_msg.contains("No own OAuth client configured"));
         }
     }
 
@@ -1782,7 +1875,7 @@ mod tests {
         if !crate::oauth_config::client_config_path().exists() {
             assert!(result.is_err());
             match result.unwrap_err() {
-                GwsError::Auth(msg) => assert!(msg.contains("No OAuth client configured")),
+                GwsError::Auth(msg) => assert!(msg.contains("No own OAuth client configured")),
                 other => panic!("Expected Auth error, got: {other:?}"),
             }
         }

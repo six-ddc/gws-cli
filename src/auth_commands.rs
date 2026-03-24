@@ -212,8 +212,8 @@ fn auth_command() -> clap::Command {
         )
         .subcommand(clap::Command::new("logout").about("Clear saved credentials and token cache"))
         .subcommand(
-            clap::Command::new("import-workspace")
-                .about("Import credentials from gemini-cli-extensions/workspace keychain"),
+            clap::Command::new("login-workspace")
+                .about("Authenticate via Cloud Function proxy (no client secret needed)"),
         )
 }
 
@@ -255,7 +255,7 @@ pub async fn handle_auth_command(args: &[String]) -> Result<(), GwsError> {
             handle_export(unmasked).await
         }
         Some(("logout", _)) => handle_logout(),
-        Some(("import-workspace", _)) => handle_import_workspace().await,
+        Some(("login-workspace", _)) => handle_login_workspace().await,
         _ => {
             // No subcommand → print help
             auth_command()
@@ -1295,20 +1295,29 @@ async fn handle_status() -> Result<(), GwsError> {
     Ok(())
 }
 
-/// Import credentials from the gemini-cli-extensions/workspace keychain.
+/// Authenticate via the Cloud Function proxy OAuth flow.
 ///
-/// 1. Read the workspace extension's OAuth credentials from the OS keychain.
-/// 2. Refresh the token via the Cloud Function proxy to verify it works.
-/// 3. Fetch the user's email to confirm identity.
+/// Uses the same approach as the gemini-cli-extensions/workspace extension:
+/// 1. Open the browser to Google's OAuth consent page (redirect_uri = Cloud Function).
+/// 2. Cloud Function exchanges the auth code for tokens (it holds the client secret).
+/// 3. Cloud Function redirects back to a local HTTP server with tokens.
 /// 4. Save the credential as an encrypted `cloud_function_proxy` credential.
-async fn handle_import_workspace() -> Result<(), GwsError> {
-    let cred = crate::cloud_auth::import_from_workspace()?;
+async fn handle_login_workspace() -> Result<(), GwsError> {
+    // Use the same scopes that gws needs for its Workspace operations.
+    // We always include identity scopes so we can fetch the user's email.
+    let scopes: Vec<&str> = vec![
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/presentations",
+    ];
 
-    // Verify the credential works by obtaining a token
-    let access_token = cred
-        .get_token()
-        .await
-        .map_err(|e| GwsError::Auth(format!("Failed to verify imported credentials: {e:#}")))?;
+    let (cred, access_token) = crate::cloud_auth::login(&scopes).await?;
 
     // Fetch user email to confirm identity
     let email = fetch_userinfo_email(&access_token).await;
@@ -1323,7 +1332,7 @@ async fn handle_import_workspace() -> Result<(), GwsError> {
 
     let output = json!({
         "status": "success",
-        "message": "Workspace extension credentials imported successfully.",
+        "message": "Authentication successful. Encrypted credentials saved.",
         "account": email.as_deref().unwrap_or("(unknown)"),
         "credentials_file": enc_path.display().to_string(),
         "credential_type": "cloud_function_proxy",

@@ -181,6 +181,9 @@ async fn get_token_inner(
 ) -> anyhow::Result<String> {
     match creds {
         Credential::CloudFunctionProxy(cred) => {
+            // Scopes are baked into the credential at import time and enforced
+            // server-side by the Cloud Function proxy, so `scopes` is unused here.
+            let _ = scopes;
             cred.get_token()
                 .await
                 .map_err(|e| anyhow::anyhow!("Cloud Function proxy auth failed: {e:#}"))
@@ -228,6 +231,7 @@ async fn get_token_inner(
 ///
 /// Determines the credential type from the `"type"` field:
 /// - `"service_account"` → [`Credential::ServiceAccount`]
+/// - `"cloud_function_proxy"` → [`Credential::CloudFunctionProxy`]
 /// - anything else (including `"authorized_user"`) → [`Credential::AuthorizedUser`]
 ///
 /// Uses the already-parsed `serde_json::Value` to avoid a second string parse.
